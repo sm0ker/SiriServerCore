@@ -134,7 +134,7 @@ class googlePlacesSearch(Plugin):
           self.complete_request()
 
 
-     @register("en-US", ".*bury.*dead.*body.*"")
+     @register("en-US", ".*bury.*dead.*body.*")
      @register("en-GB", "(find|show|where).* (hide).* (dead|body|corpse)")
      def googleplaces_body(self, speech, language, regex):
          root = UIAddViews(self.refId)
