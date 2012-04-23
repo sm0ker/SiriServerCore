@@ -5,10 +5,8 @@
 .settings
 database.sqlite3
 apiKeys.conf
-plugins.conf
 ca.pem
 cakey.pem
 server.crt
 server.key
 
-plugins/
