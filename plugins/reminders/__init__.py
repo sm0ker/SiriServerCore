@@ -40,13 +40,10 @@ responses = {
     {'en-US': [u"Sorry I could not properly cancel your reminder"]
      },
 'createReminderFail':
-    {'en-US': [u"I could not create a new reminder, sorry!"]
-     },
-'updateReminderFailed':
-    {'en-US': [u"Sorry, I could not update your reminder!"]
+    {'en-US': [u"Oops, looks like something went wrong, please try again later, sorry!"]
      },
 'Remind':
-    {'en-US': [u"Ok, I'll remind you!"]
+    {'en-US': [u"Ok, I'll remind you!", u"Ok, I've created the reminder"]
      },
 'RemindFail':
     {'en-US': [u"Something seems to have gone wrong, I could not create your reminder"]
@@ -58,17 +55,11 @@ responses = {
 
 questions = {
 'answerCREATE': 
-    {'en-US': ['yes', 'send']
+    {'en-US': ['yes', 'send', 'yep', 'sure', 'do it', 'yeah', 'okay', 'ok']
      },
 'answerCANCEL':
-    {'en-US': ['cancel', 'no', 'abort']
+    {'en-US': ['cancel', 'no', 'delete', 'nope', 'abort']
      },
-'answerUPDATE':
-    {'en-US': ['change', 'update']
-     },
-'answerREVIEW':
-    {'en-US': ['review', 'view']
-     }
 }
 
 snippetButtons = {
@@ -327,125 +318,84 @@ class Reminders(Plugin):
             return None
         
     def askAndSetTime(self, reminder, language):
-        createAnchor = self.createReminderSnippet(reminder, False, "Createreminder#reminderMissingTime", random.choice(responses['queryReminderTime'][language]), language)
-        answer = self.getResponseForRequest(createAnchor)
         tz = timezone(self.connection.assistant.timeZoneId)
         x = datetime.now(tz)
         pmWords = ["pm", "tonight"]
         amWords = ["am"]
         correctTime = None
-        
-        relativematch = re.match('in ((?P<relative>(?P<relativeinteger>([0-9/ ])*|in||a|an|the)\s+(?P<relativeunits>(minutes?|hrs?|hours?|days?|weeks?))))', answer, re.IGNORECASE)
-        if relativematch is not None:
-            #print "relativefound"
-            timetype = "Relative"
-            relativeint = relativematch.group('relativeinteger')
-            relativeunit = relativematch.group('relativeunits').strip("s").title()
-            #print relativeint
-            #print relativeunit
-            if relativeunit == "Minute":
-                z = int(relativeint) * 60
-                correctTime = x + timedelta(seconds=z)
-            if relativeunit == "Hour":
-                z = int(relativeint) * 60 * 60
-                correctTime = x + timedelta(seconds=z)
-            if relativeunit == "Day":
-                z = int(relativeint) * 24 * 60 * 60
-                correctTime = x + timedelta(seconds=z)
-            if relativeunit == "Week":
-                z = int(relativeint) * 7 * 24 * 60 * 60
-                correctTime = x + timedelta(seconds=z)
+        State = "noTime"
+        Satisfied = False
+        while not Satisfied:
+            createAnchor = self.createReminderSnippet(reminder, False, "Createreminder#reminderMissingTime", random.choice(responses['queryReminderTime'][language]), language)
+            answer = self.getResponseForRequest(createAnchor)
+            relativematch = re.match('in ((?P<relative>(?P<relativeinteger>([0-9/ ])*|in||a|an|the)\s+(?P<relativeunits>(minutes?|hrs?|hours?|days?|weeks?))))', answer, re.IGNORECASE)
+            if relativematch is not None:
+                State = "Time"
+                Satisfied = True
+                print "relativefound"
+                timetype = "Relative"
+                relativeint = relativematch.group('relativeinteger')
+                relativeunit = relativematch.group('relativeunits').strip("s").title()
+                if relativeunit == "Minute":
+                    z = int(relativeint) * 60
+                    correctTime = x + timedelta(seconds=z)
+                if relativeunit == "Hour":
+                    z = int(relativeint) * 60 * 60
+                    correctTime = x + timedelta(seconds=z)
+                if relativeunit == "Day":
+                    z = int(relativeint) * 24 * 60 * 60
+                    correctTime = x + timedelta(seconds=z)
+                if relativeunit == "Week":
+                    z = int(relativeint) * 7 * 24 * 60 * 60
+                    correctTime = x + timedelta(seconds=z)
                 
-        weekdaymatch = re.match('(?P<weekday>on (?P<dayofweek>(monday?|tuesday?|wednesday?|thursday?|friday?|saturday?|sunday?)) at ((?P<weekdayhour>([0-9]{1,2}):?\s*([0-9]{2})?\s*)(?P<weekdayampm>(am|pm))?|noon|midnight)(\s|$))', answer, re.IGNORECASE)
-        if weekdaymatch is not None:
-            #print "weekdayfound"
-            timetype = "Hour"
-            dayofweek = weekdaymatch.group('dayofweek')
-            parsehour = weekdaymatch.group('weekdayhour')
-            hour = weekdaymatch.group('weekdayhour')
-            timehint = weekdaymatch.group('weekdayampm')
-            #print timehint
-            #print len(hour)
-            #print len(hour)
-            if dayofweek == "monday":
-                dayofweek = 1
-            if dayofweek == "tuesday":
-                dayofweek = 2
-            if dayofweek == "wednesday":
-                dayofweek = 3
-            if dayofweek == "thursday":
-                dayofweek = 4
-            if dayofweek == "friday":
-                dayofweek = 5
-            if dayofweek == "saturday":
-                dayofweek = 6
-            if dayofweek == "sunday":
-                dayofweek = 7
-            if len(str(hour)) < 4:
-                for pmhints in pmWords:
-                    if pmhints in timehint:
-                        #print "using PM"
-                        #print hour
-                        if int(hour) == 12:
-                            correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
-                        if int(hour) != 12:
-                            hour = int(hour) + 12
-                            correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
-                for amhints in amWords:
-                    if amhints in timehint:
-                        #print "using AM"
-                        if int(hour) == 12:
-                            correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
-                        if int(hour) != 12:
-                            correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
-            if len(str(hour)) > 3:
-                if len(str(hour)) == 4:
-                    hour = parsehour[0]
-                    minutes = parsehour[1:3]
-                if len(str(hour)) == 5:
-                    hour = parsehour[0:2]
-                    minutes = parsehour[2:4]
-                #print hour
-                #print minutes
-                x = datetime.now(tz)
-                for pmhints in pmWords:
-                    if pmhints in timehint:
-                        #print "using PM"
-                        if int(hour) == 12:
-                            correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
-                        if int(hour) != 12:
-                            hour = int(hour) + 12
-                            correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
-                for amhints in amWords:
-                    if amhints in timehint:
-                        #print "using AM"
-                        if int(hour) == 12:
-                            correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
-                        if int(hour) != 12:
-                            correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
-            #print x.isoweekday()
-            #print dayofweek
-            if x.isoweekday() < dayofweek:
-                difference = dayofweek - x.isoweekday()
-                correctTime = correctTime + timedelta(days=difference)
-            if x.isoweekday() > dayofweek:
-                difference = dayofweek - x.isoweekday() + 7
-                correctTime = correctTime + timedelta(days=difference)
-
-        hourmatch = re.match('(?P<signal>(at|by)) (?P<hour>([0-9]{1,2}):?\s*([0-9]{2})?\s*)(?P<ampm>(am|pm|tonight|in the morning)?|noon|midnight)(\s|$)', answer, re.IGNORECASE)       
-        if hourmatch is not None:
+            weekdaymatch = re.match('(?P<weekday>on (?P<dayofweek>(monday?|tuesday?|wednesday?|thursday?|friday?|saturday?|sunday?)) at ((?P<weekdayhour>([0-9]{1,4}):?\s*([0-9]{2})?\s*)(?P<weekdayampm>(am|pm))?|noon|midnight)(\s|$))', answer, re.IGNORECASE)
+            if weekdaymatch is not None:
+                State = "Time"
+                Satisfied = True
                 timetype = "Hour"
-                #print "Using hour"
-                #print hourmatch.group('ampm')
-                parsehour = hourmatch.group('hour')
-                hour = hourmatch.group('hour')
-                timehint = hourmatch.group('ampm')
-                #print len(str(hour))
+                dayofweek = weekdaymatch.group('dayofweek')
+                parsehour = weekdaymatch.group('weekdayhour')
+                hour = weekdaymatch.group('weekdayhour')
+                timehint = weekdaymatch.group('weekdayampm')
+                if dayofweek == "monday":
+                    dayofweek = 1
+                if dayofweek == "tuesday":
+                    dayofweek = 2
+                if dayofweek == "wednesday":
+                    dayofweek = 3
+                if dayofweek == "thursday":
+                    dayofweek = 4
+                if dayofweek == "friday":
+                    dayofweek = 5
+                if dayofweek == "saturday":
+                    dayofweek = 6
+                if dayofweek == "sunday":
+                    dayofweek = 7
+                if timehint == "":
+                    if int(hour) > 1259:
+                        sethour = parsehour[0:2]
+                        minutes = parsehour[2:4]
+                        correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                    else:
+                        if 2 < len(hour) < 4:
+                            sethour = parsehour[0:1]
+                            minutes = parsehour[1:3]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        if len(hour) > 3:
+                            sethour = parsehour[0:2]
+                            minutes = parsehour[2:4]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        if len(hour) == 1:
+                            sethour = parsehour[0:1]
+                            correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
+                        if len(hour) == 2:
+                            print "yay"
+                            sethour = parsehour[0:2]
+                            correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
                 if len(str(hour)) < 4:
                     for pmhints in pmWords:
                         if pmhints in timehint:
-                            #print "using PM"
-                            #print hour
                             if int(hour) == 12:
                                 correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
                             if int(hour) != 12:
@@ -453,7 +403,6 @@ class Reminders(Plugin):
                                 correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
                     for amhints in amWords:
                         if amhints in timehint:
-                            #print "using AM"
                             if int(hour) == 12:
                                 correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
                             if int(hour) != 12:
@@ -468,7 +417,6 @@ class Reminders(Plugin):
                     x = datetime.now(tz)
                     for pmhints in pmWords:
                         if pmhints in timehint:
-                            #print "using PM"
                             if int(hour) == 12:
                                 correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
                             if int(hour) != 12:
@@ -476,60 +424,131 @@ class Reminders(Plugin):
                                 correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
                     for amhints in amWords:
                         if amhints in timehint:
-                            #print "using AM"
                             if int(hour) == 12:
                                 correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
                             if int(hour) != 12:
                                 correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
-                if hourmatch.group('signal') == "by":
-                    correctTime = correctTime - timedelta(minutes=30)
-                if correctTime < x:
-                    correctTime = correctTime + timedelta(days=1)
+                if x.isoweekday() < dayofweek:
+                    difference = dayofweek - x.isoweekday()
+                    correctTime = correctTime + timedelta(days=difference)
+                if x.isoweekday() > dayofweek:
+                    difference = dayofweek - x.isoweekday() + 7
+                    correctTime = correctTime + timedelta(days=difference)
 
-        locationmatch = re.match('(?P<location>When I ((?P<arrive>(get|arrive))|(?P<leave>(leave)))( to)?( at)? ((?P<default>home|work)|(?P<custom>[\S]+$)))', answer, re.IGNORECASE)
-        if locationmatch is not None:
-            if locationmatch.group('arrive'):
-                timetype = ["Location", "Arrival"]
-            if locationmatch.group('leave'):
-                timetype = ["Location", "Departure"]
-            if locationmatch.group('default'):
-                locationToSearch = locationmatch.group('default')
-                locationToSearch = locationToSearch.capitalize()
-                correctTime = "_$!<{0}>!$_".format(locationToSearch)
-            if locationmatch.group('custom'):
-                locationToSearch = locationmatch.group('custom')
-                correctTime = locationToSearch.capitalize()
-            if timetype[1] == "Arrival":
-                ArriveDepart = "OnArrival"
-            if timetype[1] == "Departure":
-                ArriveDepart = "OnDeparture"
-            x = None
+            hourmatch = re.match('(?P<signal>(at|by)) (?P<hour>([0-9]{1,4}):?\s*([0-9]{2})?\s*)(?P<ampm>(am|pm|tonight|in the morning)?|noon|midnight)(\s|$)', answer, re.IGNORECASE)       
+            if hourmatch is not None:
+                    State = "Time"
+                    Satisfied = True
+                    timetype = "Hour"
+                    parsehour = hourmatch.group('hour')
+                    hour = hourmatch.group('hour')
+                    timehint = hourmatch.group('ampm')
+                    if timehint == "":
+                        if int(hour) > 1259:
+                            sethour = parsehour[0:2]
+                            minutes = parsehour[2:4]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        else:
+                            if 2 < len(hour) < 4:
+                                sethour = parsehour[0:1]
+                                minutes = parsehour[1:3]
+                                correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                            if len(hour) > 3:
+                                sethour = parsehour[0:2]
+                                minutes = parsehour[2:4]
+                                correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                            if len(hour) == 1:
+                                sethour = parsehour[0:1]
+                                correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
+                            if len(hour) == 2:
+                                print "yay"
+                                sethour = parsehour[0:2]
+                                correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
+                    if len(str(hour)) < 4:
+                        for pmhints in pmWords:
+                            if pmhints in timehint:
+                                if int(hour) == 12:
+                                    correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                                if int(hour) != 12:
+                                    hour = int(hour) + 12
+                                    correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
+                        for amhints in amWords:
+                            if amhints in timehint:
+                                if int(hour) == 12:
+                                    correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                                if int(hour) != 12:
+                                    correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                    if len(str(hour)) > 3:
+                        if len(str(hour)) == 4:
+                            hour = parsehour[0]
+                            minutes = parsehour[1:3]
+                        if len(str(hour)) == 5:
+                            hour = parsehour[0:2]
+                            minutes = parsehour[2:4]
+                        x = datetime.now(tz)
+                        for pmhints in pmWords:
+                            if pmhints in timehint:
+                                if int(hour) == 12:
+                                    correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                                if int(hour) != 12:
+                                    hour = int(hour) + 12
+                                    correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                        for amhints in amWords:
+                            if amhints in timehint:
+                                if int(hour) == 12:
+                                    correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                                if int(hour) != 12:
+                                    correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                    if hourmatch.group('signal') == "by":
+                        correctTime = correctTime - timedelta(minutes=30)
+                    if correctTime < x:
+                        correctTime = correctTime + timedelta(days=1)
 
-            if correctTime == "Here":
-                x = self.herefind()
-                identifier = None
-            else:
-                x = locationFind(self, correctTime)
-                identifier = x[7]
-            if x != None:
-                print x
-                Loc = Location()
-                Loc.street = x[2]
-                Loc.countryCode = x[6]
-                Loc.city = x[3]
-                Loc.label = correctTime
-                Loc.postalCode = x[4]
-                Loc.latitude = x[0]
-                Loc.stateCode = x[5]
-                Loc.longitude = x[1]
-                Loc.accuracy = "10.0"
-            if x == None:
-                self.say("Sorry, I couldn't find that location in your contact card")
-                self.complete_request()
+            locationmatch = re.match('(?P<location>When I ((?P<arrive>(get|arrive))|(?P<leave>(leave)))( to)?( at)? ((?P<default>home|work)|(?P<custom>[\S]+$)))', answer, re.IGNORECASE)
+            if locationmatch is not None:
+                State = "Time"
+                Satisfied = True
+                if locationmatch.group('arrive'):
+                    timetype = ["Location", "Arrival"]
+                if locationmatch.group('leave'):
+                    timetype = ["Location", "Departure"]
+                if locationmatch.group('default'):
+                    locationToSearch = locationmatch.group('default')
+                    locationToSearch = locationToSearch.capitalize()
+                    correctTime = "_$!<{0}>!$_".format(locationToSearch)
+                if locationmatch.group('custom'):
+                    locationToSearch = locationmatch.group('custom')
+                    correctTime = locationToSearch.capitalize()
+                if timetype[1] == "Arrival":
+                    ArriveDepart = "OnArrival"
+                if timetype[1] == "Departure":
+                    ArriveDepart = "OnDeparture"
+                x = None
+
+                if correctTime == "Here":
+                    x = self.herefind()
+                    identifier = None
+                else:
+                    x = locationFind(self, correctTime)
+                    identifier = x[7]
+                if x != None:
+                    print x
+                    Loc = Location()
+                    Loc.street = x[2]
+                    Loc.countryCode = x[6]
+                    Loc.city = x[3]
+                    Loc.label = correctTime
+                    Loc.postalCode = x[4]
+                    Loc.latitude = x[0]
+                    Loc.stateCode = x[5]
+                    Loc.longitude = x[1]
+                    Loc.accuracy = "10.0"
+                if x == None:
+                    self.say("Sorry, I couldn't find that location in your contact card")
+                    self.complete_request()
         
-        if correctTime == None:
-            self.say("Sorry, I didn't understand that")
-            self.complete_request()
+        if State == "noTime":
+            self.say("Sorry, I didn't understand that...")        
         if timetype[0] == "Location":
             trig = ReminderLocationTrigger()
             trig.contactIdentifier = identifier
@@ -754,6 +773,26 @@ class Reminders(Plugin):
                     dayofweek = 6
                 if dayofweek == "sunday":
                     dayofweek = 7
+                if timehint == "":
+                    if int(hour) > 1259:
+                        sethour = parsehour[0:2]
+                        minutes = parsehour[2:4]
+                        correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                    else:
+                        if 2 < len(hour) < 4:
+                            sethour = parsehour[0:1]
+                            minutes = parsehour[1:3]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        if len(hour) > 3:
+                            sethour = parsehour[0:2]
+                            minutes = parsehour[2:4]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        if len(hour) == 1:
+                            sethour = parsehour[0:1]
+                            correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
+                        if len(hour) == 2:
+                            sethour = parsehour[0:2]
+                            correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
                 if len(str(hour)) < 4:
                     for pmhints in pmWords:
                         if pmhints in timehint:
@@ -819,12 +858,30 @@ class Reminders(Plugin):
                     correctTime = locationToSearch.capitalize()
             if regex.group('hour'):
                 timetype = "Hour"
-                ##print "Using hour"
-                ##print regex.group('ampm')
                 parsehour = regex.group('hour')
                 hour = regex.group('hour')
                 timehint = regex.group('ampm')
-                ##print len(str(hour))
+                if timehint == "":
+                    if int(hour) > 1259:
+                        sethour = parsehour[0:2]
+                        minutes = parsehour[2:4]
+                        correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                    else:
+                        if 2 < len(hour) < 4:
+                            sethour = parsehour[0:1]
+                            minutes = parsehour[1:3]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        if len(hour) > 3:
+                            sethour = parsehour[0:2]
+                            minutes = parsehour[2:4]
+                            correctTime = x.replace(hour=int(sethour), minute=int(minutes), second=0, microsecond=0)
+                        if len(hour) == 1:
+                            sethour = parsehour[0:1]
+                            correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
+                        if len(hour) == 2:
+                            print "yay"
+                            sethour = parsehour[0:2]
+                            correctTime = x.replace(hour=int(sethour), minute=0, second=0, microsecond=0)
                 if len(str(hour)) < 4:
                     for pmhints in pmWords:
                         if pmhints in timehint:
