@@ -31,6 +31,8 @@ def askBOT(input):
 	xmlData = xmlData.replace('<br>', ' ')
 	xmlData = xmlData.replace('Clownfish', 'Siri')
 	xmlData = xmlData.replace('Shark Labs', 'Apple')
+	xmlData = xmlData.replace('My is Raven', 'I was made by Apple')
+	xmlData = xmlData.replace('I obey Raven', 'I was made by Apple in California')
 	return xmlData
 
 
