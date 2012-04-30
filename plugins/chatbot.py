@@ -2,7 +2,7 @@ from plugin import *
 import urllib2 
 from xml.dom.minidom import parseString
 
-botID= "d689f7b8de347251"
+botID= "b63f3ee30e34cbdd"
 
 def askBOT(input):	
 	#convert symbols to HEX
