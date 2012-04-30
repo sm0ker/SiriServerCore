@@ -1,100 +1,890 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-import re
+#Reminder Plugin by Javik
+#For SiriServerCore
+import pytz
+from pytz import timezone
+from plugin import *
+from siriObjects.baseObjects import ObjectIsCommand
+from siriObjects.contactObjects import ABPersonSearch, ABPersonSearchCompleted
+from siriObjects.reminderObjects import *
+from siriObjects.systemObjects import SendCommands, StartRequest, \
+    PersonAttribute, Person, DomainObjectCreate, DomainObjectCreateCompleted, \
+    DomainObjectUpdate, DomainObjectUpdateCompleted, DomainObjectRetrieve, \
+    DomainObjectRetrieveCompleted, DomainObjectCommit, DomainObjectCommitCompleted, \
+    DomainObjectCancel, DomainObjectCancelCompleted, Location
+from siriObjects.uiObjects import UIConfirmationOptions, ConfirmSnippet, UIConfirmSnippet, UICancelSnippet
+from datetime import *
+import random
 import urllib2, urllib
 import json
-import logging
-from uuid import uuid4
-from plugin import *
 
-from siriObjects.baseObjects import AceObject, ClientBoundCommand
-from siriObjects.uiObjects import AddViews, AssistantUtteranceView
-from siriObjects.systemObjects import DomainObject, DomainObjectCreate, DomainObjectRetrieve, DomainObjectUpdate, DomainObjectCommit
-from siriObjects.reminderObjects import *
+pmWords = ["pm", "tonight"]
+amWords = ["am", "in the morning"]
 
-class Create(ClientBoundCommand):
-    def __init__(self, refId=None, important=False, completed=False, subject=""):
-        super(Create, self).__init__("Object", "com.apple.ace.reminder", None, None)
-        self.subject = subject
-        self.important = False
-        self.completed = False
+responses = {
+'cantUnderstand': 
+    {'en-US': [u"Sorry, I did not understand, please try again", u"Sorry, I don't know what you want"]
+     },
+'queryReminderTime':
+    {'en-US': [u"When should I remind you?", u"When would you like to be reminded?"]
+     },
+'showUpdatedReminder': 
+    {'en-US': [u"I updated your reminder. Ready to create it?", u"Ok, I got that, do you want to create it?", u"Thanks, do you want to create it now?"]
+     },
+'cancelReminder': 
+    {'en-US': [u"Ok, I won't remind you.", u"Ok, I deleted it."]
+     },
+'cancelFail':
+    {'en-US': [u"Sorry I could not properly cancel your reminder"]
+     },
+'createReminderFail':
+    {'en-US': [u"I could not create a new reminder, sorry!"]
+     },
+'updateReminderFailed':
+    {'en-US': [u"Sorry, I could not update your reminder!"]
+     },
+'Remind':
+    {'en-US': [u"Ok, I'll remind you!"]
+     },
+'RemindFail':
+    {'en-US': [u"Something seems to have gone wrong, I could not create your reminder"]
+     },
+'clarification':
+    {'en-US': [u"Would you like to cancel, or change it?"]
+     }
+}
+
+questions = {
+'answerCREATE': 
+    {'en-US': ['yes', 'send']
+     },
+'answerCANCEL':
+    {'en-US': ['cancel', 'no', 'abort']
+     },
+'answerUPDATE':
+    {'en-US': ['change', 'update']
+     },
+'answerREVIEW':
+    {'en-US': ['review', 'view']
+     }
+}
+
+snippetButtons = {
+'denyText':
+    {'de-DE': "Cancel",
+     'en-US': "Cancel"
+     },
+'cancelLabel':
+    {'de-DE': "Cancel",
+     'en-US': "Cancel"
+     },
+'submitLabel':
+    {'de-DE': "Confirm",
+     'en-US': "Confirm"
+     },
+'confirmText':
+    {'de-DE': "Confirm",
+     'en-US': "Confirm"
+     },
+'cancelTrigger':
+    {'de-DE': "Deny",
+     'en-US': "Deny"
+     }
+}
+
+speakableDemitter={
+'en-US': u", or ",
+'de-DE': u', oder '}
+
+class Reminders(Plugin):
+    
+    def locationFind(self, locationType):
+        print locationType      
+        meSearch = ABPersonSearch(self.refId)
+        meSearch.me = True
+        meSearch.scope = "Local"
+        answer = self.getResponseForRequest(meSearch)
+        if ObjectIsCommand(answer, ABPersonSearchCompleted):
+            results = ABPersonSearchCompleted(answer)
+            persons = results.results
+            identfind = results.results[0]
+        contactIdentifier = identfind.identifier 
+        me = persons[0]
+        Addresses = filter(lambda x: x.label == locationType, me.addresses)
+        if len(Addresses) > 0:
+            Result = Addresses[0]
+            Street = Result.street
+            PostalCode = Result.postalCode
+            City = Result.city
+            Title = "{0}, {1}, {2}".format(Street, City, PostalCode)
+            Query = urllib.quote_plus(str(Title.encode("utf-8")))
+            googleurl = "http://maps.googleapis.com/maps/api/geocode/json?address={0}&sensor=true".format(Query)
+            jsonString = urllib2.urlopen(googleurl, timeout=20).read()
+            response = json.loads(jsonString)
+            if (response['status'] == 'OK') and (len(response['results'])):
+                for result in response['results']:
+                    latitude=result['geometry']['location']['lat']
+                    longitude=result['geometry']['location']['lng']
+                    stateCode=result['address_components'][4]['long_name']
+                    countryCode=result['address_components'][5]['long_name']
+                    Location = [latitude, longitude, Street, City, PostalCode, stateCode, countryCode, contactIdentifier]
+                    return Location
+        else: 
+            return
+
+
+    def herefind(self):
+          mapGetLocation = self.getCurrentLocation(force_reload=True,accuracy=GetRequestOrigin.desiredAccuracyBest)
+          latitude= mapGetLocation.latitude
+          longitude= mapGetLocation.longitude
+          googleurl = "http://maps.googleapis.com/maps/api/geocode/json?latlng={0},{1}&sensor=true".format(latitude, longitude)
+          jsonString = urllib2.urlopen(googleurl, timeout=20).read()
+          response = json.loads(jsonString)
+          if (response['status'] == 'OK') and (len(response['results'])):
+            googleplaces_results = []
+            for result in response['results']:
+              result = response['results'][0]
+              formattedaddress=result['formatted_address']
+              formattedaddress=formattedaddress.replace(',','')
+              split = formattedaddress.rsplit()
+              Street = split[0] + " " + split[1] + " " + split[2]
+              City = split[3]
+              PostalCode = split[5]
+              stateCode = split[4]
+              countryCode = split[6]
+              Location = [latitude, longitude, Street, City, PostalCode, stateCode, countryCode]
+              return Location
+          else:
+            return
+    
+    def finalCommit(self, reminder, language):
         
-    def to_plist(self):
-    	self.add_item('important')
-        self.add_item('completed')
-        self.add_property('subject')
-        return super(Create, self).to_plist()
-
-class Update(ClientBoundCommand):
-    def __init__(self, refId=None, identifier=""):
-        super(Update, self).__init__("Reminder", "com.apple.ace.reminder", None, None)
-        self.identifier = identifier
-
-    def to_plist(self):
-        self.add_property('identifier')
-        return super(Update, self).to_plist()
-
-class reminders(Plugin):
-    localizations = {"reminderDefaults": 
-                        {"searching":{"en-US": "Creating your reminder ..."}, 
-                         "result": {"en-US": "Here is your reminder:"},
-                         "nothing": {"en-US": "What should I remind you of?"}}, 
-                    "failure": {
-                                "en-US": "I cannot create your reminder right now."
-                                }
-                    }
-    @register("en-US", "(.*remind [a-zA-Z0-9]+)|(.*create.*reminder [a-zA-Z0-9]+)|(.*set.*reminder [a-zA-Z0-9]+)")
-    def createReminder(self, speech, language):
-        content_raw = re.match(".*reminder ([a-zA-Z0-9, ]+)$", speech, re.IGNORECASE)
-        if content_raw == None:
-            view_initial = AddViews(self.refId, dialogPhase="Reflection")
-            view_initial.views = [AssistantUtteranceView(text=reminders.localizations['reminderDefaults']['nothing'][language], speakableText=reminders.localizations['reminderDefaults']['nothing'][language], dialogIdentifier="Reminder#failed")]
-            self.sendRequestWithoutAnswer(view_initial)
+        commitCMD = DomainObjectCommit(self.refId)
+        commitCMD.identifier = ReminderObject()
+        commitCMD.identifier.identifier = reminder.identifier
+        
+        answer = self.getResponseForRequest(commitCMD)
+        if ObjectIsCommand(answer, DomainObjectCommitCompleted):
+            answer = DomainObjectCommitCompleted(answer)
+            reminder.identifier = answer.identifier
+            lists = ReminderListObject()
+            lists.name = "Reminders"
+            reminder.lists = lists
+            createAnchor = UIAddViews(self.refId)
+            createAnchor.dialogPhase = createAnchor.DialogPhaseConfirmedValue
+            askCreateView = UIAssistantUtteranceView()
+            askCreateView.dialogIdentifier = "CreateReminder#createdReminder"
+            askCreateView.text = askCreateView.speakableText = random.choice(responses['Remind'][language])
+            askCreateView.listenAfterSpeaking = False
+            snippet = ReminderSnippet()
+            snippet.reminders = [reminder]
+            createAnchor.views = [askCreateView, snippet]
+            self.sendRequestWithoutAnswer(createAnchor)
+            self.complete_request()
         else:
-            view_initial = AddViews(self.refId, dialogPhase="Reflection")
-            view_initial.views = [AssistantUtteranceView(text=reminders.localizations['reminderDefaults']['searching'][language], speakableText=reminders.localizations['reminderDefaults']['searching'][language], dialogIdentifier="Reminder#creating")]
-            self.sendRequestWithoutAnswer(view_initial)
+            self.say(random.choice(responses['RemindFail'][language]))
+            self.complete_request()
             
-            content_raw = content_raw.group(1).strip()
-            if "me to" in content_raw:
-                split = content_raw.split(' ')
-                if split[0] == "me to":
-                    split.pop(0)
-                    content_raw = ' '.join(map(str, split))
-            if "for" in content_raw:
-                split = content_raw.split(' ')
-                if split[0] == "for":
-                    split.pop(0)
-                    content_raw = ' '.join(map(str, split))
+            
+    def createReminderSnippet(self, reminder, addConfirmationOptions, dialogIdentifier, text, language):
+        createAnchor = UIAddViews(self.refId)
+        createAnchor.dialogPhase = createAnchor.DialogPhaseConfirmationValue
 
-			# adds reminder
-            reminder_create = Create()
-            reminder_create.subject = content_raw
-            domain_object = DomainObjectCreate(refId = self.refId)
-            domain_object.object = reminder_create
-            reminder_return = self.getResponseForRequest(domain_object)
-            print reminder_return
+        askCreateView = UIAssistantUtteranceView()
+        askCreateView.dialogIdentifier = dialogIdentifier
+        askCreateView.text = askCreateView.speakableText = text
+        askCreateView.listenAfterSpeaking = True
+        
+        snippet = ReminderSnippet()
+        if addConfirmationOptions:
+            
+            conf = UIConfirmSnippet({})
+            conf.requestId = self.refId
+            
+            confOpts = UIConfirmationOptions()
+            confOpts.submitCommands = [SendCommands([conf, StartRequest(False, "^reminderConfirmation^=^yes^")])]
+            confOpts.confirmCommands = confOpts.submitCommands
+            
+            cancel = UICancelSnippet({})
+            cancel.requestId = self.refId
+            
+            confOpts.cancelCommands = [SendCommands([cancel, StartRequest(False, "^reminderConfirmation^=^cancel^, ^no^")])]
+            confOpts.denyCommands = confOpts.cancelCommands
+            
+            confOpts.denyText = snippetButtons['denyText'][language]
+            confOpts.cancelLabel = snippetButtons['cancelLabel'][language]
+            confOpts.submitLabel = snippetButtons['submitLabel'][language]
+            confOpts.confirmText = snippetButtons['confirmText'][language]
+            confOpts.cancelTrigger = snippetButtons['cancelTrigger'][language]
+            
+            snippet.confirmationOptions = confOpts
+            
+        snippet.reminders = [reminder]
+        createAnchor.views = [askCreateView, snippet]
+        return createAnchor
+            
+    def createNewReminder(self, content, correctTime, timetype, EndDate):
+        tz = timezone(self.connection.assistant.timeZoneId)
+        ##print EndDate
+        ##print correctTime
+        if timetype == "Relative":
+            trig = ReminderDateTimeTrigger()
+            trig.timeZoneId = self.connection.assistant.timeZoneId
+            trig.date = EndDate
+            x = ReminderObject()
+            x.trigger = trig
+            x.important = False
+            x.completed = False
+            x.subject = content.capitalize().strip("in")
+            x.dueDate = EndDate
+            x.dueDateTimeZoneId = trig.timeZoneId
+            
+        if timetype == "Hour":
+            trig = ReminderDateTimeTrigger()
+            trig.timeZoneId = self.connection.assistant.timeZoneId
+            trig.date = correctTime
+            x = ReminderObject()
+            x.important = False
+            x.completed = False
+            x.subject = content.capitalize().strip("at")
+            x.trigger = trig
+            x.dueDate = correctTime
+            x.dueDateTimeZoneId = trig.timeZoneId
+            
+        if timetype[0] == "Location":
+            if timetype[1] == "Arrival":
+                ArriveDepart = "OnArrival"
+            if timetype[1] == "Departure":
+                ArriveDepart = "OnDeparture"
+            x = None
+            
+            if correctTime == "Here":
+                x = self.herefind()
+                identifier = None
+            else:
+                x = self.locationFind(correctTime)
+                identifier = x[7]
+            if x != None:
+                print x
+                Loc = Location()
+                Loc.street = x[2]
+                Loc.countryCode = x[6]
+                Loc.city = x[3]
+                Loc.label = correctTime
+                Loc.postalCode = x[4]
+                Loc.latitude = x[0]
+                Loc.stateCode = x[5]
+                Loc.longitude = x[1]
+                Loc.accuracy = "10.0"
+                trig = ReminderLocationTrigger()
+                trig.contactIdentifier = identifier
+                trig.timing = ArriveDepart
+                trig.location = Loc
+                x = ReminderObject()
+                x.important = False
+                x.completed = False
+                x.subject = content.capitalize().strip("at")
+                x.trigger = trig        
+            else:
+                self.say("Sorry, I couldn't find that location in your contact card")
+                self.complete_request()
+            
+        answer = self.getResponseForRequest(DomainObjectCreate(self.refId, x))
+        if ObjectIsCommand(answer, DomainObjectCreateCompleted):
+            answer = DomainObjectCreateCompleted(answer)
+            x = ReminderObject()
+            x.identifier = answer.identifier
+            return x
+        else:
+            return None
+    def createnewremindernoinfo(self, content):
+        x = ReminderObject()
+        x.important = False
+        x.completed = False
+        x.subject = content
+        answer = self.getResponseForRequest(DomainObjectCreate(self.refId, x))
+        if ObjectIsCommand(answer, DomainObjectCreateCompleted):
+            answer = DomainObjectCreateCompleted(answer)
+            x = ReminderObject()
+            x.identifier = answer.identifier
+            return x
+        else:
+            return None
+    def getReminderIdentifier(self, identifier):
+        retrieveCMD = DomainObjectRetrieve(self.refId)
+        x = ReminderObject()
+        x.identifier = identifier
+        retrieveCMD.identifiers = [x]
+        answer = self.getResponseForRequest(retrieveCMD)
+        if ObjectIsCommand(answer, DomainObjectRetrieveCompleted):
+            answer = DomainObjectRetrieveCompleted(answer)
+            result = ReminderObject()
+            result.initializeFromPlist(answer.objects[0].to_plist())
+            return result
+        else:
+            return None
+        
+    def askAndSetTime(self, reminder, language):
+        createAnchor = self.createReminderSnippet(reminder, False, "Createreminder#reminderMissingTime", random.choice(responses['queryReminderTime'][language]), language)
+        answer = self.getResponseForRequest(createAnchor)
+        tz = timezone(self.connection.assistant.timeZoneId)
+        x = datetime.now(tz)
+        pmWords = ["pm", "tonight"]
+        amWords = ["am"]
+        correctTime = None
+        
+        relativematch = re.match('in ((?P<relative>(?P<relativeinteger>([0-9/ ])*|in||a|an|the)\s+(?P<relativeunits>(minutes?|hrs?|hours?|days?|weeks?))))', answer, re.IGNORECASE)
+        if relativematch is not None:
+            #print "relativefound"
+            timetype = "Relative"
+            relativeint = relativematch.group('relativeinteger')
+            relativeunit = relativematch.group('relativeunits').strip("s").title()
+            #print relativeint
+            #print relativeunit
+            if relativeunit == "Minute":
+                z = int(relativeint) * 60
+                correctTime = x + timedelta(seconds=z)
+            if relativeunit == "Hour":
+                z = int(relativeint) * 60 * 60
+                correctTime = x + timedelta(seconds=z)
+            if relativeunit == "Day":
+                z = int(relativeint) * 24 * 60 * 60
+                correctTime = x + timedelta(seconds=z)
+            if relativeunit == "Week":
+                z = int(relativeint) * 7 * 24 * 60 * 60
+                correctTime = x + timedelta(seconds=z)
+                
+        weekdaymatch = re.match('(?P<weekday>on (?P<dayofweek>(monday?|tuesday?|wednesday?|thursday?|friday?|saturday?|sunday?)) at ((?P<weekdayhour>([0-9]{1,2}):?\s*([0-9]{2})?\s*)(?P<weekdayampm>(am|pm))?|noon|midnight)(\s|$))', answer, re.IGNORECASE)
+        if weekdaymatch is not None:
+            #print "weekdayfound"
+            timetype = "Hour"
+            dayofweek = weekdaymatch.group('dayofweek')
+            parsehour = weekdaymatch.group('weekdayhour')
+            hour = weekdaymatch.group('weekdayhour')
+            timehint = weekdaymatch.group('weekdayampm')
+            #print timehint
+            #print len(hour)
+            #print len(hour)
+            if dayofweek == "monday":
+                dayofweek = 1
+            if dayofweek == "tuesday":
+                dayofweek = 2
+            if dayofweek == "wednesday":
+                dayofweek = 3
+            if dayofweek == "thursday":
+                dayofweek = 4
+            if dayofweek == "friday":
+                dayofweek = 5
+            if dayofweek == "saturday":
+                dayofweek = 6
+            if dayofweek == "sunday":
+                dayofweek = 7
+            if len(str(hour)) < 4:
+                for pmhints in pmWords:
+                    if pmhints in timehint:
+                        #print "using PM"
+                        #print hour
+                        if int(hour) == 12:
+                            correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                        if int(hour) != 12:
+                            hour = int(hour) + 12
+                            correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
+                for amhints in amWords:
+                    if amhints in timehint:
+                        #print "using AM"
+                        if int(hour) == 12:
+                            correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                        if int(hour) != 12:
+                            correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+            if len(str(hour)) > 3:
+                if len(str(hour)) == 4:
+                    hour = parsehour[0]
+                    minutes = parsehour[1:3]
+                if len(str(hour)) == 5:
+                    hour = parsehour[0:2]
+                    minutes = parsehour[2:4]
+                #print hour
+                #print minutes
+                x = datetime.now(tz)
+                for pmhints in pmWords:
+                    if pmhints in timehint:
+                        #print "using PM"
+                        if int(hour) == 12:
+                            correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                        if int(hour) != 12:
+                            hour = int(hour) + 12
+                            correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                for amhints in amWords:
+                    if amhints in timehint:
+                        #print "using AM"
+                        if int(hour) == 12:
+                            correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                        if int(hour) != 12:
+                            correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+            #print x.isoweekday()
+            #print dayofweek
+            if x.isoweekday() < dayofweek:
+                difference = dayofweek - x.isoweekday()
+                correctTime = correctTime + timedelta(days=difference)
+            if x.isoweekday() > dayofweek:
+                difference = dayofweek - x.isoweekday() + 7
+                correctTime = correctTime + timedelta(days=difference)
 
-			# retrieves reminder
-			
-			# update / commit reminder
-            reminder_update = Update()
-            reminder_update.identifier = reminder_return["properties"]["identifier"]
-            domain_object_up = DomainObjectCommit(refId = self.refId)
-            domain_object_up.identifier = reminder_update
-            reminder_update_return = self.getResponseForRequest(domain_object_up)
-            print reminder_update_return
-			# send view
+        hourmatch = re.match('(?P<signal>(at|by)) (?P<hour>([0-9]{1,2}):?\s*([0-9]{2})?\s*)(?P<ampm>(am|pm|tonight|in the morning)?|noon|midnight)(\s|$)', answer, re.IGNORECASE)       
+        if hourmatch is not None:
+                timetype = "Hour"
+                #print "Using hour"
+                #print hourmatch.group('ampm')
+                parsehour = hourmatch.group('hour')
+                hour = hourmatch.group('hour')
+                timehint = hourmatch.group('ampm')
+                #print len(str(hour))
+                if len(str(hour)) < 4:
+                    for pmhints in pmWords:
+                        if pmhints in timehint:
+                            #print "using PM"
+                            #print hour
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                hour = int(hour) + 12
+                                correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    for amhints in amWords:
+                        if amhints in timehint:
+                            #print "using AM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                if len(str(hour)) > 3:
+                    if len(str(hour)) == 4:
+                        hour = parsehour[0]
+                        minutes = parsehour[1:3]
+                    if len(str(hour)) == 5:
+                        hour = parsehour[0:2]
+                        minutes = parsehour[2:4]
+                    x = datetime.now(tz)
+                    for pmhints in pmWords:
+                        if pmhints in timehint:
+                            #print "using PM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                            if int(hour) != 12:
+                                hour = int(hour) + 12
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                    for amhints in amWords:
+                        if amhints in timehint:
+                            #print "using AM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                if hourmatch.group('signal') == "by":
+                    correctTime = correctTime - timedelta(minutes=30)
+                if correctTime < x:
+                    correctTime = correctTime + timedelta(days=1)
+
+        locationmatch = re.match('(?P<location>When I ((?P<arrive>(get|arrive))|(?P<leave>(leave)))( to)?( at)? ((?P<default>home|work)|(?P<custom>[\S]+$)))', answer, re.IGNORECASE)
+        if locationmatch is not None:
+            if locationmatch.group('arrive'):
+                timetype = ["Location", "Arrival"]
+            if locationmatch.group('leave'):
+                timetype = ["Location", "Departure"]
+            if locationmatch.group('default'):
+                locationToSearch = locationmatch.group('default')
+                locationToSearch = locationToSearch.capitalize()
+                correctTime = "_$!<{0}>!$_".format(locationToSearch)
+            if locationmatch.group('custom'):
+                locationToSearch = locationmatch.group('custom')
+                correctTime = locationToSearch.capitalize()
+            if timetype[1] == "Arrival":
+                ArriveDepart = "OnArrival"
+            if timetype[1] == "Departure":
+                ArriveDepart = "OnDeparture"
+            x = None
+
+            if correctTime == "Here":
+                x = self.herefind()
+                identifier = None
+            else:
+                x = locationFind(self, correctTime)
+                identifier = x[7]
+            if x != None:
+                print x
+                Loc = Location()
+                Loc.street = x[2]
+                Loc.countryCode = x[6]
+                Loc.city = x[3]
+                Loc.label = correctTime
+                Loc.postalCode = x[4]
+                Loc.latitude = x[0]
+                Loc.stateCode = x[5]
+                Loc.longitude = x[1]
+                Loc.accuracy = "10.0"
+            if x == None:
+                self.say("Sorry, I couldn't find that location in your contact card")
+                self.complete_request()
         
-            view = AddViews(self.refId, dialogPhase="Summary")
-            view1 = AssistantUtteranceView(text=reminders.localizations['reminderDefaults']['result'][language], speakableText=reminders.localizations['reminderDefaults']['result'][language], dialogIdentifier="Reminder#created")
+        if correctTime == None:
+            self.say("Sorry, I didn't understand that")
+            self.complete_request()
+        if timetype[0] == "Location":
+            trig = ReminderLocationTrigger()
+            trig.contactIdentifier = identifier
+            trig.timing = ArriveDepart
+            trig.location = Loc
+        if timetype[0] is not "Location":
+            trig = ReminderDateTimeTrigger()
+            trig.timeZoneId = self.connection.assistant.timeZoneId
+            trig.date = correctTime
+
+        updateCMD = DomainObjectUpdate(self.refId)
+        updateCMD.identifier = reminder       
+        updateCMD.setFields = ReminderObject()
+        updateCMD.setFields.trigger = trig
+        updateCMD.setFields.important = False
+        if timetype[0] is not "Location":
+            updateCMD.setFields.dueDate = correctTime
+            updateCMD.setFields.dueDateTimeZoneId = trig.timeZoneId
+        updateCMD.setFields.completed = False
+
         
-            reminder_ = ReminderObject()
-            reminder_.subject = content_raw
-            reminder_.identifier = reminder_return["properties"]["identifier"]
         
-            view2 = ReminderSnippet(reminders=[reminder_])
-            view.views = [view1, view2]
-            self.sendRequestWithoutAnswer(view)
+        answer = self.getResponseForRequest(updateCMD)
+        if ObjectIsCommand(answer, DomainObjectUpdateCompleted):
+            return reminder
+        else:
+            return None
+
+    def showUpdatedReminderAndAskToCreate(self, reminder, language):
+        createAnchor = self.createReminderSnippet(reminder, True, "Createreminder#updatedTime", random.choice(responses['showUpdatedReminder'][language]), language)
+        
+        response = self.getResponseForRequest(createAnchor)
+        match = re.match("\^reminderConfirmation\^=\^(?P<answer>.*)\^", response)
+        if match:
+            response = match.group('answer')
+        
+        return response
+    
+    def cancelReminder(self, reminder, language):
+        # cancel the reminder
+        cancelCMD = DomainObjectCancel(self.refId)
+        cancelCMD.identifier = ReminderObject()
+        cancelCMD.identifier.identifier = reminder.identifier
+        
+        answer = self.getResponseForRequest(cancelCMD)
+        if ObjectIsCommand(answer, DomainObjectCancelCompleted):
+            createAnchor = UIAddViews(self.refId)
+            createAnchor.dialogPhase = createAnchor.DialogPhaseCanceledValue
+            cancelView = UIAssistantUtteranceView()
+            cancelView.dialogIdentifier = "Createreminder#wontRemind"
+            cancelView.text = cancelView.speakableText = random.choice(responses['cancelReminder'][language])
+            createAnchor.views = [cancelView]
+            
+            self.sendRequestWithoutAnswer(createAnchor)
+            self.complete_request()
+        else:
+            self.say(random.choice(responses['cancelFail'][language]))
+            self.complete_request()
+    
+    def askForClarification(self, reminder, language):
+        createAnchor = self.createReminderSnippet(reminder, True, "Createreminder#notReadyToRemind", random.choice(responses['clarification'][language]), language)
+        
+        response = self.getResponseForRequest(createAnchor)
+        match = re.match("\^reminderConfirmation\^=\^(?P<answer>.*)\^", response)
+        if match:
+            response = match.group('answer')
+            
+        return response
+        
+    def reminding(self, content, correctTime, timetype, language, EndDate):
+        ReminderObj = self.createNewReminder(content, correctTime, timetype, EndDate)
+        if ReminderObj == None:
+            self.say(random.choice(responses['updateReminderFailed'][language]))
+            self.complete_request()
+            return
+        satisfied = False
+        state = "SHOW"
+        
+        while not satisfied:
+            ReminderObj = self.getReminderIdentifier(ReminderObj.identifier)
+            if ReminderObj == None:
+                self.say(u"Sorry I lost your reminder.")
+                self.complete_request()
+                return
+            
+            if state == "SHOW":
+                instruction = self.showUpdatedReminderAndAskToCreate(ReminderObj, language).strip().lower()
+                if any(k in instruction for k in (questions['answerCREATE'][language])):
+                    state = "CREATE"
+                    continue
+                if any(k in instruction for k in (questions['answerCANCEL'][language])):
+                    state = "CANCEL"
+                    continue
+                self.say(random.choice(responses['cantUnderstand'][language]))
+                continue
+            
+            elif state == "CLARIFY":
+                instruction = self.askForClarification(ReminderObj, language).strip().lower()
+                if any(k in instruction for k in (questions['answerCREATE'][language])):
+                    state = "CREATE"
+                    continue
+                if any(k in instruction for k in (questions['answerCANCEL'][language])):
+                    state = "CANCEL"
+                    continue
+                self.say(random.choice(responses['cantUnderstand'][language]))
+                continue
+            
+            elif state == "CANCEL":
+                self.cancelReminder(ReminderObj, language)
+                satisfied = True
+                continue
+            
+            elif state == "CREATE":
+                self.finalCommit(ReminderObj, language)
+                satisfied = True
+                continue
+    def remindingnoinfo(self, content, language):
+        ReminderObj = self.createnewremindernoinfo(content)
+        if ReminderObj == None:
+            self.say(random.choice(responses['updateReminderFailed'][language]))
+            self.complete_request()
+            return
+        ReminderObj = self.askAndSetTime(ReminderObj, language)
+        if ReminderObj == None:
+            self.say(random.choice(responses['updateReminderFail'][language]))
+            self.complete_request()
+            return
+        satisfied = False
+        state = "SHOW"
+        
+        while not satisfied:
+            ReminderObj = self.getReminderIdentifier(ReminderObj.identifier)
+            if ReminderObj == None:
+                self.say(u"Sorry I lost your reminder.")
+                self.complete_request()
+                return
+
+            if state == "SHOW":
+                instruction = self.showUpdatedReminderAndAskToCreate(ReminderObj, language).strip().lower()
+                if any(k in instruction for k in (questions['answerCREATE'][language])):
+                    state = "CREATE"
+                    continue
+                if any(k in instruction for k in (questions['answerCANCEL'][language])):
+                    state = "CANCEL"
+                    continue
+                self.say(random.choice(responses['cantUnderstand'][language]))
+                continue
+
+            elif state == "CLARIFY":
+                instruction = self.askForClarification(ReminderObj, language).strip().lower()
+                if any(k in instruction for k in (questions['answerCREATE'][language])):
+                    state = "CREATE"
+                    continue
+                if any(k in instruction for k in (questions['answerCANCEL'][language])):
+                    state = "CANCEL"
+                    continue
+                self.say(random.choice(responses['cantUnderstand'][language]))
+                continue
+
+            elif state == "CANCEL":
+                self.cancelReminder(ReminderObj, language)
+                satisfied = True
+                continue
+
+            elif state == "CREATE":
+                self.finalCommit(ReminderObj, language)
+                satisfied = True
+                continue
+    
+    @register("en-US", "(Create|Remind)( a)?( new)? (me|reminder) to (?P<content>[\w ]+?) ((?P<relative>(?P<relativeinteger>([0-9/ ])*|in||a|an|the)\s+(?P<relativeunits>(mins?|minutes?|hrs?|hours?|days?|weeks?)))|(?P<weekday>on (?P<dayofweek>(monday?|tuesday?|wednesday?|thursday?|friday?|saturday?|sunday?)) at ((?P<weekdayhour>([0-9]{1,2}):?\s*([0-9]{2})?\s*)(?P<weekdayampm>(am|pm))?|noon|midnight)(\s|$))|(?P<location>when I ((?P<arrive>(get|arrive))|(?P<leave>(leave)))( to)?( at)? ((?P<default>home|work)|(?P<custom>[\S]+$)))|(?P<hour>([0-9]{1,2}):?\s*([0-9]{2})?\s*)(?P<ampm>(am|pm|tonight|in the morning)?|noon|midnight))(\s|$)")
+    def Remind(self, speech, lang, regex):
+        ##print regex.groups()
+        content = regex.group('content')
+        conent = content.capitalize()
+        tz = timezone(self.connection.assistant.timeZoneId)
+        x = datetime.now(tz)
+        EndDate = None
+        pmWords = ["pm", "tonight"]
+        amWords = ["am"]
+        EndDate = None
+        lastword = content.split()[-1] 
+        if content != None:
+            if regex.group('relative'):
+                ##print "Using Relative"
+                timetype = "Relative"
+                relativeint = regex.group('relativeinteger')
+                relativeunit = regex.group('relativeunits').strip("s").title()
+                if relativeunit == "Minute":
+                    z = int(relativeint) * 60
+                    EndDate = x + timedelta(seconds=z)
+                if relativeunit == "Hour":
+                    z = int(relativeint) * 60 * 60
+                    EndDate = x + timedelta(seconds=z)
+                if relativeunit == "Day":
+                    z = int(relativeint) * 24 * 60 * 60
+                    EndDate = x + timedelta(seconds=z)
+                if relativeunit == "Week":
+                    z = int(relativeint) * 7 * 24 * 60 * 60
+                    EndDate = x + timedelta(seconds=z)
+                correctTime = z
+
+            if regex.group('weekday'):
+                ##print "Using Weekday"
+                timetype = "Hour"
+                dayofweek = regex.group('dayofweek')
+                parsehour = regex.group('weekdayhour')
+                hour = regex.group('weekdayhour')
+                timehint = regex.group('weekdayampm')
+                ##print timehint
+                ##print hour
+                if dayofweek == "monday":
+                    dayofweek = 1
+                if dayofweek == "tuesday":
+                    dayofweek = 2
+                if dayofweek == "wednesday":
+                    dayofweek = 3
+                if dayofweek == "thursday":
+                    dayofweek = 4
+                if dayofweek == "friday":
+                    dayofweek = 5
+                if dayofweek == "saturday":
+                    dayofweek = 6
+                if dayofweek == "sunday":
+                    dayofweek = 7
+                if len(str(hour)) < 4:
+                    for pmhints in pmWords:
+                        if pmhints in timehint:
+                            ##print "using PM"
+                            ##print hour
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                hour = int(hour) + 12
+                                correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    for amhints in amWords:
+                        if amhints in timehint:
+                            ##print "using AM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                if len(str(hour)) > 3:
+                    if len(str(hour)) == 4:
+                        hour = parsehour[0]
+                        minutes = parsehour[1:3]
+                    if len(str(hour)) == 5:
+                        hour = parsehour[0:2]
+                        minutes = parsehour[2:4]
+                    ##print hour
+                    ##print minutes
+                    x = datetime.now(tz)
+                    for pmhints in pmWords:
+                        if pmhints in timehint:
+                            ##print "using PM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                            if int(hour) != 12:
+                                hour = int(hour) + 12
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                    for amhints in amWords:
+                        if amhints in timehint:
+                            ##print "using AM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                ##print x.isoweekday()
+                ##print dayofweek
+                if x.isoweekday() < dayofweek:
+                    difference = dayofweek - x.isoweekday()
+                    correctTime = correctTime + timedelta(days=difference)
+                if x.isoweekday() > dayofweek:
+                    difference = dayofweek - x.isoweekday() + 7
+                    correctTime = correctTime + timedelta(days=difference)
+            if regex.group('location'):
+                print "Using Location"
+                if regex.group('arrive'):
+                    timetype = ["Location", "Arrival"]
+                if regex.group('leave'):
+                    timetype = ["Location", "Departure"]
+                if regex.group('default'):
+                    locationToSearch = regex.group('default')
+                    locationToSearch = locationToSearch.capitalize()
+                    correctTime = "_$!<{0}>!$_".format(locationToSearch)
+                if regex.group('custom'):
+                    locationToSearch = regex.group('custom')
+                    correctTime = locationToSearch.capitalize()
+            if regex.group('hour'):
+                timetype = "Hour"
+                ##print "Using hour"
+                ##print regex.group('ampm')
+                parsehour = regex.group('hour')
+                hour = regex.group('hour')
+                timehint = regex.group('ampm')
+                ##print len(str(hour))
+                if len(str(hour)) < 4:
+                    for pmhints in pmWords:
+                        if pmhints in timehint:
+                            ##print "using PM"
+                            ##print hour
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                hour = int(hour) + 12
+                                correctTime = x.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    for amhints in amWords:
+                        if amhints in timehint:
+                            ##print "using AM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                correctTime = x.replace(hour=int(hour), minute=0, second=0, microsecond=0)
+                if len(str(hour)) > 3:
+                    if len(str(hour)) == 4:
+                        hour = parsehour[0]
+                        minutes = parsehour[1:3]
+                    if len(str(hour)) == 5:
+                        hour = parsehour[0:2]
+                        minutes = parsehour[2:4]
+                    x = datetime.now(tz)
+                    for pmhints in pmWords:
+                        if pmhints in timehint:
+                            ##print "using PM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                            if int(hour) != 12:
+                                hour = int(hour) + 12
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                    for amhints in amWords:
+                        if amhints in timehint:
+                            ##print "using AM"
+                            if int(hour) == 12:
+                                correctTime = x.replace(hour=23, minute=59, second=0, microsecond=0)
+                            if int(hour) != 12:
+                                correctTime = x.replace(hour=int(hour), minute=int(minutes), second=0, microsecond=0)
+                if lastword == "by":
+                    correctTime = correctTime - timedelta(minutes=30)
+                if correctTime < x:
+                    correctTime = correctTime + timedelta(days=1)
+
+            if lastword == "at":
+                content = content.replace(" at", "")
+            if lastword == "in":
+                content = content.replace(" in", "")
+            if lastword == "by":
+                content = content.replace(" by", "")
+            self.reminding(content, correctTime, timetype, lang, EndDate)                             
+        self.complete_request()
+        
+    @register("en-US", "(Create|Remind)( a)?( new)? (me|reminder) to (?P<content>[\w ]+?)$")
+    def RemindNoInfo(self, speech, lang, regex):
+        content = regex.group('content')
+        content = content.capitalize()
+        if content != None:
+            self.remindingnoinfo(content, lang)
+            return
+        self.say(responses['notFound'][lang])                         
         self.complete_request()
