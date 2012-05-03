@@ -42,7 +42,7 @@ class XBMC_object():
         json.Playlist.Add(playlistid=1, item=item)
         json.Player.Open({ 'playlistid': 1 })
 
-class XBMC(Plugin):	    
+class XBMC(Plugin):        
 
     def addPictureView(self,title,image_url):
         view = AddViews(self.refId, dialogPhase="Completion")
@@ -54,6 +54,7 @@ class XBMC(Plugin):
     global xbmc
     xbmc = XBMC_object()
             
+    @register("de-DE", "(xbmc)|(xbmc.* [a-z]+)")
     @register("en-US", "(xbmc)|(xbmc.* [a-z]+)")
     def test2(self, speech, language):
         global xbmc
@@ -115,7 +116,7 @@ class XBMC(Plugin):
                     xbmc.play(json,{'file':trailer})
                 else:
                     self.say("It seems that there is no trailer available for this movie.")
-            elif 'play' in command or 'plate' in command or 'place' in command or 'played' in command or 'start' in command:
+            elif 'play' in command or 'plate' in command or 'place' in command or 'played' in command:
                 command, title=command.split(' ',1)
                 if 'first occurrence' in title:
                     first_match = True
