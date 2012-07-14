@@ -2,7 +2,7 @@ from plugin import *
 import urllib2 
 from xml.dom.minidom import parseString
 
-botID= "b63f3ee30e34cbdd"
+botID= "8545d6421e34d00b"
 
 def askBOT(input):	
 	#convert symbols to HEX
@@ -29,6 +29,8 @@ def askBOT(input):
 	xmlData = xmlData.replace('&gt;', '>')
 	xmlData = xmlData.replace('&amp;', '&')
 	xmlData = xmlData.replace('<br>', ' ')
+	xmlData = xmlData.replace('I was created by ', 'I was created by Apple')
+	xmlData = xmlData.replace('Ashanti', 'Siri')
 	xmlData = xmlData.replace('Clownfish', 'Siri')
 	xmlData = xmlData.replace('Shark Labs', 'Apple')
 	xmlData = xmlData.replace('My is Raven', 'I was made by Apple')
